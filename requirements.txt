@@ -1,0 +1,23 @@
+# 核心数据获取与处理
+akshare>=1.14.0,<2.0.0      # 金融数据接口（东方财富/新浪等数据源）
+pandas>=2.0.0               # 数据处理与表格操作
+numpy>=1.24.0               # 数值计算（pandas依赖）
+
+# 网络请求与解析
+requests>=2.31.0            # HTTP客户端（akshare底层依赖）
+urllib3>=2.0.0              # HTTP库（requests依赖）
+beautifulsoup4>=4.12.0      # HTML解析（akshare用于网页抓取）
+lxml>=4.9.0                 # XML/HTML高速解析器
+
+# 数据存储与格式
+openpyxl>=3.1.0             # Excel文件读写（akshare导出用）
+xlrd>=2.0.1                 # 旧版Excel读取
+
+# 工具与辅助
+python-dateutil>=2.8.0      # 日期时间处理
+tqdm>=4.65.0                # 进度条显示（可选，用于本地测试观察进度）
+loguru>=0.7.0               # 更友好的日志输出（可选，比标准logging更易读）
+
+# 开发测试（可选）
+pytest>=7.4.0               # 单元测试框架
+pytest-asyncio>=0.21.0      # 异步测试支持
