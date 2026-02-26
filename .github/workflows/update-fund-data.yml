@@ -2,9 +2,8 @@ name: Update Fund Database
 
 on:
   schedule:
-    # 每天凌晨 2:30 运行（避开交易时间，且持仓数据通常 T+1 披露）
     - cron: '30 2 * * *'
-  workflow_dispatch:  # 支持手动触发
+  workflow_dispatch:
     inputs:
       fund_type:
         description: '指定抓取类型 (all/equity/mix/index)'
@@ -14,23 +13,23 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 300  # 5小时超时保护
+    timeout-minutes: 300
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4        # 升级到v4
       with:
-        ref: data-branch  # 检出数据分支，避免污染主分支
+        ref: data-branch
         
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5    # 升级到v5
       with:
         python-version: '3.10'
         
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install akshare pandas sqlite3 requests
+        pip install akshare pandas
         
     - name: Fetch fund data
       env:
@@ -43,21 +42,22 @@ jobs:
         sqlite3 data/funds.db "VACUUM;"
         ls -lh data/
         
-    - name: Commit and force push to data-branch
+    - name: Commit and force push
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Actions"
         
-        # 创建orphan分支（如果不存在）或强制更新
         git add data/funds.db data/meta.json
-        git commit -m "Update: $(date +'%Y-%m-%d %H:%M') | Funds: $(sqlite3 data/funds.db 'SELECT COUNT(DISTINCT fund_code) FROM holdings;') records" || echo "No changes"
+        git commit -m "Update: $(date +'%Y-%m-%d %H:%M') | Funds: $(sqlite3 data/funds.db 'SELECT COUNT(DISTINCT fund_code) FROM holdings;' 2>/dev/null || echo '0') records" || echo "No changes"
         
-        # 强制推送到data-branch分支（不保留历史，避免仓库膨胀）
         git push origin HEAD:data-branch --force
         
-    - name: Upload artifact (backup)
-      uses: actions/upload-artifact@v3
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4   # 关键修复：v3→v4
       with:
         name: fund-db-backup
         path: data/funds.db
         retention-days: 7
+        # v4新增的可选配置（保持默认即可）：
+        compression-level: 6               # 压缩级别（0-9）
+        overwrite: true                    # 如果artifact已存在则覆盖
