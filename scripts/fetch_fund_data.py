@@ -116,11 +116,16 @@ class FundDataCollector:
             nav_df = ak.fund_open_fund_daily_em()
             nav_df = nav_df[nav_df['基金代码'].isin(fund_codes)]
             
+            # 找到包含"单位净值"的列名（格式为"日期-单位净值"）
+            nav_cols = [col for col in nav_df.columns if '单位净值' in col and '-' in col]
+            date_col = nav_cols[0] if nav_cols else None
+            
             nav_map = {}
             for _, row in nav_df.iterrows():
+                nav_value = row[date_col] if date_col and pd.notna(row.get(date_col)) else None
                 nav_map[row['基金代码']] = {
-                    'nav': float(row['单位净值']) if pd.notna(row['单位净值']) else None,
-                    'date': row['净值日期']
+                    'nav': float(nav_value) if nav_value is not None else None,
+                    'date': date_col.split('-单位净值')[0] if date_col else None  # 提取日期部分
                 }
             return nav_map
         except Exception as e:
