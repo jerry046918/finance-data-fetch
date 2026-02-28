@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+"""
+公募基金基础数据采集工具（简化版）
+
+只获取基金列表和净值数据，通过基金类型映射资产大类。
+用于资产配置分析，不需要持仓明细。
+"""
+
 import akshare as ak
 import pandas as pd
 import sqlite3
@@ -5,8 +13,8 @@ import time
 import argparse
 import json
 import os
-from datetime import datetime, timedelta
-from typing import List, Dict
+from datetime import datetime
+from typing import Dict, List, Optional
 import logging
 
 logging.basicConfig(
@@ -15,7 +23,107 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+# ============================================================
+# 基金类型 -> 资产大类映射
+# ============================================================
+
+FUND_TYPE_TO_ASSET_CLASS = {
+    # 股票类
+    '股票型': '股票',
+    '混合型-偏股': '股票',
+    '混合型-平衡': '股票',
+    '混合型-灵活': '股票',  # 灵活配置，默认归为股票
+    '指数型-股票': '股票',
+    '指数型-海外股票': '海外股票',
+    
+    # 债券类
+    '债券型-长债': '债券',
+    '债券型-中短债': '债券',
+    '债券型-混合一级': '债券',
+    '债券型-混合二级': '债券',
+    '混合型-偏债': '债券',
+    '指数型-固收': '债券',
+    
+    # 现金/货币
+    '货币型-普通货币': '现金',
+    '货币型-浮动净值': '现金',
+    
+    # FOF（根据风险等级归类）
+    'FOF-进取型': '股票',
+    'FOF-均衡型': '混合',
+    'FOF-稳健型': '债券',
+    
+    # QDII 股票
+    'QDII-普通股票': '海外股票',
+    'QDII-混合偏股': '海外股票',
+    'QDII-混合灵活': '海外股票',
+    'QDII-混合平衡': '海外股票',
+    
+    # QDII 债券
+    'QDII-纯债': '海外债券',
+    'QDII-混合债': '海外债券',
+    
+    # QDII 其他
+    'QDII-商品': '商品',
+    'QDII-REITs': '不动产',
+    'QDII-FOF': '海外混合',
+    
+    # 另类投资
+    'Reits': '不动产',
+    'REITs': '不动产',
+    '商品': '商品',
+    
+    # 其他
+    '混合型-绝对收益': '混合',
+    '指数型-其他': '混合',
+}
+
+# 未匹配类型的默认值
+DEFAULT_ASSET_CLASS = '其他'
+
+
+def map_fund_type_to_asset_class(fund_type: str) -> str:
+    """
+    将基金类型映射到资产大类
+    
+    Args:
+        fund_type: 基金类型，如 '混合型-偏股'
+    
+    Returns:
+        资产大类，如 '股票'
+    """
+    # 精确匹配
+    if fund_type in FUND_TYPE_TO_ASSET_CLASS:
+        return FUND_TYPE_TO_ASSET_CLASS[fund_type]
+    
+    # 模糊匹配（处理可能的新类型）
+    for pattern, asset_class in FUND_TYPE_TO_ASSET_CLASS.items():
+        if pattern in fund_type or fund_type in pattern:
+            return asset_class
+    
+    # 关键词匹配
+    if '股票' in fund_type or '权益' in fund_type:
+        return '股票'
+    if '债券' in fund_type or '债' in fund_type:
+        return '债券'
+    if '货币' in fund_type or '现金' in fund_type:
+        return '现金'
+    if 'QDII' in fund_type:
+        return '海外混合'
+    if 'FOF' in fund_type:
+        return '混合'
+    if 'REIT' in fund_type.lower() or 'reit' in fund_type.lower():
+        return '不动产'
+    if '商品' in fund_type:
+        return '商品'
+    
+    return DEFAULT_ASSET_CLASS
+
+
 class FundDataCollector:
+    """基金数据采集器（简化版）"""
+    
     def __init__(self, db_path: str = "data/funds.db"):
         self.db_path = db_path
         self.conn = None
@@ -23,98 +131,57 @@ class FundDataCollector:
         self.init_database()
         
     def init_database(self):
-        """初始化SQLite数据库结构"""
+        """初始化数据库"""
         db_dir = os.path.dirname(self.db_path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
+        
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
         
-        # 基金基础信息表（含最新净值）
+        # 基金基础信息表
         self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS funds_meta (
+            CREATE TABLE IF NOT EXISTS funds (
                 fund_code TEXT PRIMARY KEY,
                 fund_name TEXT,
                 fund_type TEXT,
+                asset_class TEXT,
                 latest_nav REAL,
                 nav_date TEXT,
-                update_time TEXT,
-                quarter TEXT  -- 最新持仓报告期，如"2024Q3"
+                update_time TEXT
             )
         ''')
         
-        # 持仓明细表（复合主键：基金代码+股票代码+季度）
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS holdings (
-                fund_code TEXT,
-                stock_code TEXT,
-                stock_name TEXT,
-                hold_ratio REAL,  -- 占净值比(%)
-                hold_value REAL,  -- 持仓市值(万元)
-                quarter TEXT,     -- 报告期
-                PRIMARY KEY (fund_code, stock_code, quarter)
-            )
-        ''')
+        # 创建索引
+        self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_asset_class ON funds(asset_class)')
+        self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_fund_type ON funds(fund_type)')
         
-        # 创建索引加速查询
-        self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_holdings_code ON holdings(fund_code)')
-        self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_holdings_stock ON holdings(stock_code)')
         self.conn.commit()
         
-    def get_fund_list(self, fund_type: str = "all") -> pd.DataFrame:
-        """
-        获取基金列表，过滤主要类型
-        fund_type: all/equity(股票型)/mix(混合型)/index(指数型)
-        """
+    def get_fund_list(self) -> pd.DataFrame:
+        """获取全部基金列表"""
         logger.info("正在获取基金列表...")
         df = ak.fund_name_em()
         
-        # 列名标准化（akshare不同版本可能有差异）
+        # 标准化列名
         df.columns = [col.strip() for col in df.columns]
         
-        # 过滤主要类型（排除货币基金、债券基金等）
-        if fund_type != "all":
-            type_mapping = {
-                "equity": ["股票型", "股票"],
-                "mix": ["混合型", "混合"],
-                "index": ["指数型", "指数", "ETF", "QDII"]
-            }
-            keywords = type_mapping.get(fund_type, [])
-            mask = df['基金类型'].str.contains('|'.join(keywords), na=False)
-            df = df[mask]
-        
-        # 排除货币基金（通常无持仓分析价值且数量庞大）
-        df = df[~df['基金类型'].str.contains('货币|债券', na=False)]
-        
-        logger.info(f"筛选后基金数量: {len(df)}")
+        logger.info(f"获取到 {len(df)} 只基金")
         return df
-    
-    def get_latest_quarter(self) -> str:
-        """自动计算当前应获取的最新报告期"""
-        now = datetime.now()
-        year = now.year
-        month = now.month
-        
-        # 报告期规则：Q1(1-3月，4月披露), Q2/H1(4-6月，7-8月披露), Q3(7-9月，10月披露), Q4/Annual(10-12月，次年3-4月披露)
-        if month >= 10:
-            quarter = f"{year}Q3"
-        elif month >= 7:
-            quarter = f"{year}Q2" if month == 7 else f"{year}Q3"  # 8-9月Q2已披露完
-        elif month >= 4:
-            quarter = f"{year}Q1"
-        else:
-            quarter = f"{year-1}Q4"  # 年初获取上年报
-            
-        return quarter
     
     def fetch_nav_data(self, fund_codes: List[str]) -> Dict[str, dict]:
         """
-        批量获取基金净值（使用open_fund_daily接口获取最新净值）
-        注意：此接口返回全市场数据，需要过滤
+        批量获取基金净值
+        
+        Args:
+            fund_codes: 基金代码列表
+        
+        Returns:
+            {基金代码: {'nav': 净值, 'date': 日期}}
         """
-        logger.info("正在获取最新净值数据...")
+        logger.info("正在获取净值数据...")
+        
         try:
-            # 获取今日或昨日净值（取决于当前时间）
             nav_df = ak.fund_open_fund_daily_em()
             nav_df = nav_df[nav_df['基金代码'].isin(fund_codes)]
             
@@ -131,132 +198,100 @@ class FundDataCollector:
                     'nav': float(nav_value) if nav_value is not None else None,
                     'date': date_col.split('-单位净值')[0] if date_col else None
                 }
+            
+            logger.info(f"获取到 {len(nav_map)} 只基金的净值数据")
             return nav_map
+            
         except Exception as e:
             logger.error(f"获取净值数据失败: {e}")
             return {}
     
-    def fetch_single_fund_holdings(self, fund_code: str, quarter: str, max_retry: int = 3) -> pd.DataFrame:
-        """获取单只基金持仓，带重试机制"""
-        for attempt in range(max_retry):
-            try:
-                # akshare的持仓接口，date参数通常是年份，但实际返回最新季度
-                # 注意：不同akshare版本参数可能有差异，这里使用通用方式
-                df = ak.fund_portfolio_hold_em(symbol=fund_code, date=quarter[:4])
-                
-                if df is not None and not df.empty:
-                    # 标准化列名
-                    df = df.rename(columns={
-                        '股票代码': 'stock_code',
-                        '股票名称': 'stock_name',
-                        '占净值比例': 'hold_ratio',
-                        '持仓市值': 'hold_value',
-                        '季度': 'quarter_detail'
-                    })
-                    
-                    # 确保数值类型正确
-                    df['hold_ratio'] = pd.to_numeric(df['hold_ratio'], errors='coerce')
-                    df['hold_value'] = pd.to_numeric(df['hold_value'], errors='coerce')
-                    
-                    # 添加基金代码和季度
-                    df['fund_code'] = fund_code
-                    df['quarter'] = quarter
-                    
-                    # 选择需要的列
-                    return df[['fund_code', 'stock_code', 'stock_name', 'hold_ratio', 'hold_value', 'quarter']]
-                    
-            except Exception as e:
-                logger.warning(f"获取 {fund_code} 持仓失败 (尝试 {attempt+1}/{max_retry}): {e}")
-                if attempt < max_retry - 1:
-                    time.sleep(2 ** attempt)  # 指数退避
-                else:
-                    return pd.DataFrame()
+    def process_funds(self, limit: Optional[int] = None) -> pd.DataFrame:
+        """
+        处理所有基金数据
         
-        return pd.DataFrame()
-    
-    def process_batch(self, fund_batch: pd.DataFrame, quarter: str, delay: float):
-        """处理一批基金"""
-        batch_holdings = []
-        batch_meta = []
+        Args:
+            limit: 限制处理数量（用于测试）
         
-        # 先获取这批基金的净值（批量接口更高效）
-        nav_data = self.fetch_nav_data(fund_batch['基金代码'].tolist())
+        Returns:
+            处理后的 DataFrame
+        """
+        # 1. 获取基金列表
+        fund_df = self.get_fund_list()
         
-        for idx, row in fund_batch.iterrows():
+        if limit:
+            fund_df = fund_df.head(limit)
+            logger.info(f"限制处理前 {limit} 只基金")
+        
+        # 2. 获取净值数据
+        fund_codes = fund_df['基金代码'].tolist()
+        nav_data = self.fetch_nav_data(fund_codes)
+        
+        # 3. 组装数据
+        records = []
+        for _, row in fund_df.iterrows():
             code = row['基金代码']
-            name = row['基金简称']
-            f_type = row.get('基金类型', '未知')
-            
-            logger.info(f"处理 [{code}] {name} ({idx+1}/{len(fund_batch)})")
-            
-            # 获取持仓
-            holdings = self.fetch_single_fund_holdings(code, quarter)
-            if not holdings.empty:
-                batch_holdings.append(holdings)
-            
-            # 组装元数据
+            fund_type = row.get('基金类型', '')
             nav_info = nav_data.get(code, {})
-            batch_meta.append({
+            
+            records.append({
                 'fund_code': code,
-                'fund_name': name,
-                'fund_type': f_type,
+                'fund_name': row.get('基金简称', ''),
+                'fund_type': fund_type,
+                'asset_class': map_fund_type_to_asset_class(fund_type),
                 'latest_nav': nav_info.get('nav'),
                 'nav_date': nav_info.get('date'),
-                'update_time': datetime.now().isoformat(),
-                'quarter': quarter if not holdings.empty else None
+                'update_time': datetime.now().isoformat()
             })
-            
-            time.sleep(delay)  # 限速，避免被封
         
-        return batch_holdings, batch_meta
+        return pd.DataFrame(records)
     
-    def save_to_database(self, holdings_list: List[pd.DataFrame], meta_list: List[dict]):
-        """保存到SQLite"""
-        if not holdings_list:
-            logger.warning("没有持仓数据需要保存")
+    def save_to_database(self, df: pd.DataFrame):
+        """保存到数据库"""
+        if df.empty:
+            logger.warning("没有数据需要保存")
             return
-            
-        # 合并持仓数据
-        all_holdings = pd.concat(holdings_list, ignore_index=True)
-        all_holdings.to_sql('holdings', self.conn, if_exists='replace', index=False)
         
-        # 更新元数据（使用UPSERT逻辑）
-        meta_df = pd.DataFrame(meta_list)
-        meta_df.to_sql('funds_meta_temp', self.conn, if_exists='replace', index=False)
-        
-        # 合并更新（保留历史记录中的有效数据）
-        self.cursor.execute('''
-            INSERT OR REPLACE INTO funds_meta 
-            SELECT * FROM funds_meta_temp
-        ''')
-        self.cursor.execute('DROP TABLE IF EXISTS funds_meta_temp')
-        
+        # 使用 replace 模式（每次全量更新）
+        df.to_sql('funds', self.conn, if_exists='replace', index=False)
         self.conn.commit()
-        logger.info(f"数据库已更新: {len(meta_list)} 只基金, {len(all_holdings)} 条持仓记录")
+        
+        logger.info(f"已保存 {len(df)} 条记录到数据库")
     
-    def generate_summary(self):
+    def generate_summary(self) -> dict:
         """生成统计摘要"""
         stats = {}
         
-        # 基金数量
-        self.cursor.execute("SELECT COUNT(*) FROM funds_meta")
+        # 总基金数
+        self.cursor.execute("SELECT COUNT(*) FROM funds")
         stats['total_funds'] = self.cursor.fetchone()[0]
         
-        # 持仓记录数
-        self.cursor.execute("SELECT COUNT(*) FROM holdings")
-        stats['total_holdings'] = self.cursor.fetchone()[0]
+        # 按资产大类统计
+        self.cursor.execute('''
+            SELECT asset_class, COUNT(*) as count 
+            FROM funds 
+            GROUP BY asset_class 
+            ORDER BY count DESC
+        ''')
+        stats['by_asset_class'] = dict(self.cursor.fetchall())
         
-        # 覆盖的股票数
-        self.cursor.execute("SELECT COUNT(DISTINCT stock_code) FROM holdings")
-        stats['unique_stocks'] = self.cursor.fetchone()[0]
+        # 按基金类型统计
+        self.cursor.execute('''
+            SELECT fund_type, COUNT(*) as count 
+            FROM funds 
+            GROUP BY fund_type 
+            ORDER BY count DESC
+            LIMIT 20
+        ''')
+        stats['by_fund_type'] = dict(self.cursor.fetchall())
         
-        # 最新报告期
-        self.cursor.execute("SELECT DISTINCT quarter FROM holdings LIMIT 1")
-        result = self.cursor.fetchone()
-        stats['quarter'] = result[0] if result else 'N/A'
+        # 更新时间
+        self.cursor.execute("SELECT MAX(update_time) FROM funds")
+        stats['update_time'] = self.cursor.fetchone()[0]
         
-        # 保存摘要到JSON（方便App快速读取元数据）
-        with open('data/meta.json', 'w', encoding='utf-8') as f:
+        # 保存摘要
+        os.makedirs('data', exist_ok=True)
+        with open('data/summary.json', 'w', encoding='utf-8') as f:
             json.dump(stats, f, ensure_ascii=False, indent=2)
         
         return stats
@@ -266,51 +301,23 @@ class FundDataCollector:
         if self.conn:
             self.conn.close()
 
+
 def main():
-    parser = argparse.ArgumentParser(description='抓取公募基金数据')
-    parser.add_argument('--type', default='all', help='基金类型: all/equity/mix/index')
-    parser.add_argument('--batch-size', type=int, default=50, help='每批处理的基金数量')
-    parser.add_argument('--delay', type=float, default=1.5, help='请求间隔(秒)')
+    parser = argparse.ArgumentParser(description='抓取公募基金基础数据（简化版）')
     parser.add_argument('--limit', type=int, default=None, help='限制处理数量（用于测试）')
+    parser.add_argument('--db', default='data/funds.db', help='数据库路径')
     args = parser.parse_args()
     
-    collector = FundDataCollector()
+    collector = FundDataCollector(db_path=args.db)
     
     try:
-        # 1. 获取基金列表
-        fund_df = collector.get_fund_list(args.type)
-        if args.limit:
-            fund_df = fund_df.head(args.limit)
+        # 处理数据
+        df = collector.process_funds(limit=args.limit)
         
-        total = len(fund_df)
-        logger.info(f"计划处理 {total} 只基金")
+        # 保存
+        collector.save_to_database(df)
         
-        # 2. 确定报告期
-        quarter = collector.get_latest_quarter()
-        logger.info(f"目标报告期: {quarter}")
-        
-        # 3. 分批处理
-        all_holdings = []
-        all_meta = []
-        
-        for start_idx in range(0, total, args.batch_size):
-            end_idx = min(start_idx + args.batch_size, total)
-            batch = fund_df.iloc[start_idx:end_idx]
-            
-            logger.info(f"处理批次 {start_idx//args.batch_size + 1}/{(total-1)//args.batch_size + 1} ({start_idx+1}-{end_idx})")
-            
-            holdings, meta = collector.process_batch(batch, quarter, args.delay)
-            all_holdings.extend(holdings)
-            all_meta.extend(meta)
-            
-            # 每完成一批，短暂休息
-            if end_idx < total:
-                time.sleep(5)
-        
-        # 4. 保存到数据库
-        collector.save_to_database(all_holdings, all_meta)
-        
-        # 5. 生成统计
+        # 生成统计
         stats = collector.generate_summary()
         logger.info(f"完成! 统计: {stats}")
         
@@ -319,6 +326,7 @@ def main():
         raise
     finally:
         collector.close()
+
 
 if __name__ == "__main__":
     main()

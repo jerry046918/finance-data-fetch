@@ -1,67 +1,61 @@
 #!/usr/bin/env python3
 """
-本地测试脚本：抓取前5只基金验证环境配置
+本地测试脚本：验证基金数据采集功能
 """
 
 import sys
 import os
 
-# 确保能找到scripts目录下的模块
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'scripts'))
 
-from fetch_fund_data import FundDataCollector
+from fetch_fund_data import FundDataCollector, map_fund_type_to_asset_class
+
 
 def quick_test():
     print("🚀 开始本地环境测试...")
     
-    # 初始化收集器（测试模式）
+    # 初始化收集器
     collector = FundDataCollector(db_path="test_funds.db")
     
     try:
-        # 只获取5只基金做测试
-        fund_df = collector.get_fund_list("equity")
-        test_funds = fund_df.head(5)
+        # 测试 1: 获取基金列表
+        print("\n📋 测试 1: 获取基金列表")
+        fund_df = collector.get_fund_list()
+        print(f"   ✅ 获取到 {len(fund_df)} 只基金")
         
-        print(f"✅ 成功获取基金列表，选取前 {len(test_funds)} 只测试")
-        print("\n测试基金:")
-        for _, row in test_funds.iterrows():
-            print(f"  - {row['基金代码']}: {row['基金简称']}")
+        # 测试 2: 类型映射
+        print("\n📋 测试 2: 基金类型映射")
+        test_types = ['混合型-偏股', '债券型-长债', '货币型-普通货币', 'QDII-普通股票', 'FOF-稳健型']
+        for t in test_types:
+            asset_class = map_fund_type_to_asset_class(t)
+            print(f"   {t} -> {asset_class}")
         
-        # 获取最新报告期
-        quarter = collector.get_latest_quarter()
-        print(f"\n📅 目标报告期: {quarter}")
+        # 测试 3: 净值获取
+        print("\n📋 测试 3: 获取净值数据")
+        test_codes = ['000001', '000002', '000003']
+        nav_data = collector.fetch_nav_data(test_codes)
+        for code, data in nav_data.items():
+            print(f"   {code}: nav={data['nav']}, date={data['date']}")
         
-        # 测试抓取第一只基金的持仓
-        first_code = test_funds.iloc[0]['基金代码']
-        print(f"\n🔍 测试抓取 [{first_code}] 的持仓数据...")
+        # 测试 4: 完整流程（限制 10 只）
+        print("\n📋 测试 4: 完整流程（10 只基金）")
+        collector2 = FundDataCollector(db_path="test_funds.db")
+        df = collector2.process_funds(limit=10)
+        print(f"   ✅ 处理 {len(df)} 条记录")
+        print(f"\n   示例数据:")
+        for _, row in df.head(3).iterrows():
+            print(f"   {row['fund_code']} {row['fund_name']}: {row['fund_type']} -> {row['asset_class']}")
         
-        holdings = collector.fetch_single_fund_holdings(first_code, quarter)
+        collector2.save_to_database(df)
         
-        if not holdings.empty:
-            print(f"✅ 成功获取持仓！共 {len(holdings)} 条记录")
-            print("\n前3条持仓示例:")
-            print(holdings.head(3)[['stock_code', 'stock_name', 'hold_ratio']])
-            
-            # 保存到测试数据库
-            collector.save_to_database([holdings], [{
-                'fund_code': first_code,
-                'fund_name': test_funds.iloc[0]['基金简称'],
-                'fund_type': '测试',
-                'latest_nav': 1.0,
-                'nav_date': '2024-01-01',
-                'update_time': '2024-01-01',
-                'quarter': quarter
-            }])
-            print(f"\n💾 数据已保存到 test_funds.db")
-            
-            # 验证数据库查询
-            collector.cursor.execute("SELECT COUNT(*) FROM holdings")
-            count = collector.cursor.fetchone()[0]
-            print(f"✅ 数据库验证: 共 {count} 条持仓记录")
-            
-        else:
-            print("⚠️ 未获取到持仓数据（可能是非交易日或季报未披露）")
-            
+        # 测试 5: 数据库查询
+        print("\n📋 测试 5: 数据库查询")
+        collector2.cursor.execute("SELECT COUNT(*) FROM funds")
+        count = collector2.cursor.fetchone()[0]
+        print(f"   ✅ 数据库中有 {count} 条记录")
+        
+        collector2.close()
+        
     except Exception as e:
         print(f"❌ 测试失败: {e}")
         import traceback
@@ -69,9 +63,10 @@ def quick_test():
         return False
     finally:
         collector.close()
-        
-    print("\n🎉 环境测试通过！可以运行完整抓取了")
+    
+    print("\n🎉 环境测试通过！")
     return True
+
 
 if __name__ == "__main__":
     success = quick_test()

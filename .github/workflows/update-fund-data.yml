@@ -4,11 +4,6 @@ on:
   schedule:
     - cron: '30 2 * * *'
   workflow_dispatch:
-    inputs:
-      fund_type:
-        description: '指定抓取类型 (all/equity/mix/index)'
-        required: false
-        default: 'all'
 
 permissions:
   contents: write
@@ -16,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 30
     
     steps:
     - name: Checkout repository
@@ -32,13 +27,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install akshare pandas
+        pip install -r requirements.txt
         
     - name: Fetch fund data
-      env:
-        FUND_TYPE: ${{ github.event.inputs.fund_type || 'all' }}
       run: |
-        python scripts/fetch_fund_data.py --type $FUND_TYPE --batch-size 50 --delay 1.5
+        python scripts/fetch_fund_data.py
         
     - name: Optimize SQLite
       run: |
@@ -50,8 +43,8 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Actions"
         
-        git add data/funds.db data/meta.json
-        git commit -m "Update: $(date +'%Y-%m-%d %H:%M') | Funds: $(sqlite3 data/funds.db 'SELECT COUNT(DISTINCT fund_code) FROM holdings;' 2>/dev/null || echo '0') records" || echo "No changes"
+        git add data/funds.db data/summary.json
+        git commit -m "Update: $(date +'%Y-%m-%d %H:%M') | $(sqlite3 data/funds.db 'SELECT COUNT(*) || \" funds\" FROM funds;')" || echo "No changes"
         
         git push origin HEAD:data-branch --force
         
