@@ -124,10 +124,12 @@ class FundDataCollector:
             
             nav_map = {}
             for _, row in nav_df.iterrows():
-                nav_value = row[date_col] if date_col and pd.notna(row.get(date_col)) else None
+                raw_value = row.get(date_col) if date_col else None
+                # 检查非空、非NaN、非空字符串
+                nav_value = raw_value if raw_value is not None and pd.notna(raw_value) and str(raw_value).strip() != '' else None
                 nav_map[row['基金代码']] = {
                     'nav': float(nav_value) if nav_value is not None else None,
-                    'date': date_col.split('-单位净值')[0] if date_col else None  # 提取日期部分
+                    'date': date_col.split('-单位净值')[0] if date_col else None
                 }
             return nav_map
         except Exception as e:
