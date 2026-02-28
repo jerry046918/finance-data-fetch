@@ -10,6 +10,9 @@ on:
         required: false
         default: 'all'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,12 +20,12 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4        # 升级到v4
+      uses: actions/checkout@v4
       with:
         ref: data-branch
         
     - name: Set up Python
-      uses: actions/setup-python@v5    # 升级到v5
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
         
@@ -53,11 +56,10 @@ jobs:
         git push origin HEAD:data-branch --force
         
     - name: Upload artifact
-      uses: actions/upload-artifact@v4   # 关键修复：v3→v4
+      uses: actions/upload-artifact@v4
       with:
         name: fund-db-backup
         path: data/funds.db
         retention-days: 7
-        # v4新增的可选配置（保持默认即可）：
-        compression-level: 6               # 压缩级别（0-9）
-        overwrite: true                    # 如果artifact已存在则覆盖
+        compression-level: 6
+        overwrite: true
