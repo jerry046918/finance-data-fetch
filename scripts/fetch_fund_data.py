@@ -65,7 +65,7 @@ class FundDataCollector:
         fund_type: all/equity(股票型)/mix(混合型)/index(指数型)
         """
         logger.info("正在获取基金列表...")
-        df = ak.fund_em_fund_name()
+        df = ak.fund_name_em()
         
         # 列名标准化（akshare不同版本可能有差异）
         df.columns = [col.strip() for col in df.columns]
@@ -113,7 +113,7 @@ class FundDataCollector:
         logger.info("正在获取最新净值数据...")
         try:
             # 获取今日或昨日净值（取决于当前时间）
-            nav_df = ak.fund_em_open_fund_daily()
+            nav_df = ak.fund_open_fund_daily_em()
             nav_df = nav_df[nav_df['基金代码'].isin(fund_codes)]
             
             nav_map = {}
