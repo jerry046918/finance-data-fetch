@@ -24,7 +24,9 @@ class FundDataCollector:
         
     def init_database(self):
         """初始化SQLite数据库结构"""
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
         
