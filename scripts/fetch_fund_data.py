@@ -133,7 +133,7 @@ class FundDataCollector:
             try:
                 # akshare的持仓接口，date参数通常是年份，但实际返回最新季度
                 # 注意：不同akshare版本参数可能有差异，这里使用通用方式
-                df = ak.fund_portfolio_hold_em(fund=fund_code, date=quarter[:4])
+                df = ak.fund_portfolio_hold_em(symbol=fund_code, date=quarter[:4])
                 
                 if df is not None and not df.empty:
                     # 标准化列名
